@@ -1,89 +1,151 @@
-import yfinance as yf
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
+from requests import get
 
-# Parameters for stock bot
-START_DATE = '2003-01-02'
-UPDATE_XLSX = True
+from requests.exceptions import RequestException
 
-OUTPUT_FILENAME = "IWMDaily.xlsx"
-# MOVING_AVERAGES = list(range(25, 30))  #DO 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
-# VOLUME_MOVING_AVERAGES = list(range(1, 200))
+from contextlib import closing
 
-tickers_list = ['IWM']
+from bs4 import BeautifulSoup
 
 
-def fetch_data():
-    if UPDATE_XLSX:
-        data = yf.download(tickers_list, START_DATE)
-        data.to_excel(OUTPUT_FILENAME)
 
-    return pd.read_excel(OUTPUT_FILENAME)
+def simple_get(url):
 
+    """
 
-def algorithm():
-    # Downloading data
-    original_data = fetch_data()
-    data = fetch_data()
-    cp_values = []
+    Attempts to get the content at `url` by making an HTTP GET request.
 
-    # Add SMA columns
-    print("Generating SMA Columns...")
-    for MOVING_AVERAGE in MOVING_AVERAGES:
-        data['SMA_' + str(MOVING_AVERAGE)] = original_data['Adj Close'].rolling(MOVING_AVERAGE).mean()
+    If the content-type of response is some kind of HTML/XML, return the
 
-    # Add SMA columns
-    print("Generating SMA VOLUME Columns...")
-    for VOLUME_MOVING_AVERAGE in VOLUME_MOVING_AVERAGES:
-        data['VSMA_' + str(VOLUME_MOVING_AVERAGE)] = original_data['Volume'].rolling(VOLUME_MOVING_AVERAGE).mean()
+    text content, otherwise return None.
 
-    # Editing df
-    data.set_index('Date', inplace=True)
-    data['SPY∆'] = data.pct_change()['Adj Close'] + 1
+    """
 
-    data['OWNED'] = True
+    try:
 
-    # Generate Data
-    for MOVING_AVERAGE in MOVING_AVERAGES:
-        print("Testing at SMA = " + str(MOVING_AVERAGE))
+        with closing(get(url, stream=True)) as resp:
 
-        SMA_COL = 'SMA_' + str(MOVING_AVERAGE)
+            if is_good_response(resp):
 
-        for VOLUME_MOVING_AVERAGE in VOLUME_MOVING_AVERAGES:
-            print("Testing at volume SMA = " + str(VOLUME_MOVING_AVERAGE))
+                return resp.content
 
-            VOL_SMA_COL = 'SMA_' + str(VOLUME_MOVING_AVERAGE)
+            else:
 
-            data['MAX'] = 0
-            data['MIN'] = 10000000
-            data['OWNED'] = True
-
-            for i in range(1, len(data) - 1):  # for each row in the dataframe
-                # if not data.iloc[i]['OWNED']:
-                if data.iloc[i]['Volume'] < data.iloc[i]['VSMA_' + str(VOLUME_MOVING_AVERAGE)]:
-                    data.iloc[i + 1, data.columns.get_loc('OWNED')] = True
-                elif ((data.iloc[i]['Adj Close'] < data.iloc[i]['SMA_' + str(MOVING_AVERAGE)]) and (
-                        data.iloc[i]['Adj Close'] < data.iloc[i - 1]['Adj Close'])):
-                    data.iloc[i + 1, data.columns.get_loc('OWNED')] = True
-                else:
-                    data.iloc[i + 1, data.columns.get_loc('OWNED')] = False
-
-            data['Final'] = np.where(data['OWNED'], data['SPY∆'], 1)
-            data['FinalCP_' + str(VOLUME_MOVING_AVERAGE) + '_' + str(MOVING_AVERAGE)] = data['Final'].cumprod(
-                skipna=True)
-
-            cp_values.append([MOVING_AVERAGE, VOLUME_MOVING_AVERAGE,
-                              data['FinalCP_' + str(VOLUME_MOVING_AVERAGE) + '_' + str(MOVING_AVERAGE)].iat[-1]])
-
-    data.to_excel('all_values.xlsx')
-    print(data)
-
-    print(cp_values)
-    # data.plot()
-    # plt.show(block=True)
+                return None
 
 
-fetch_data()
-# Execution of stock bot
-# algorithm()
+
+    except RequestException as e:
+
+        log_error('Error during requests to {0} : {1}'.format(url, str(e)))
+
+        return None
+
+
+
+
+
+def is_good_response(resp):
+
+    """
+
+    Returns True if the response seems to be HTML, False otherwise.
+
+    """
+
+    content_type = resp.headers['Content-Type'].lower()
+
+    return (resp.status_code == 200
+
+            and content_type is not None
+
+            and content_type.find('html') > -1)
+
+
+
+
+
+def log_error(e):
+
+    """
+
+    It is always a good idea to log errors.
+
+    This function just prints them, but you can
+
+    make it do anything.
+
+    """
+
+    print(e)
+
+
+
+while True:
+    ticker = input('Enter Stock Ticker: ')
+
+    if ticker == 'close':
+        break
+
+    # Closing Price
+    raw_html = simple_get('https://finance.yahoo.com/quote/' + ticker + '?p=' + ticker + '&.tsrc=fin-srch')
+
+    html = BeautifulSoup(raw_html, 'html.parser')
+
+    Price = html.find('span', {'class': 'Trsdu(0.3s) Fw(b) Fz(36px) Mb(-4px) D(ib)'}).text.replace(',', '')
+
+    NumPrice = float(Price)
+
+    print('Closing Price:', NumPrice)
+
+    # weekly low
+    Lowraw_html = simple_get(
+        'https://finance.yahoo.com/quote/' + ticker + '/history?period1=1584704232&period2=1616240232&interval=1wk&filter=history&frequency=1wk&includeAdjustedClose=true')
+
+    weekLow = BeautifulSoup(Lowraw_html, 'html.parser')
+
+    weeklyLow = weekLow.find_all('td', {'class': 'Py(10px) Pstart(10px)'})
+
+    NumWeeklyLow = float(weeklyLow[2].text.replace(',', ''))
+
+    print("Week Low:", NumWeeklyLow)
+
+    # weekly high
+    weekHigh = BeautifulSoup(Lowraw_html, 'html.parser')
+
+    weeklyHigh = weekHigh.find_all('td', {'class': 'Py(10px) Pstart(10px)'})
+
+    NumWeeklyHigh = float(weeklyHigh[1].text.replace(',', ''))
+
+    print('Week High', NumWeeklyHigh)
+
+    # 200 day moving average
+
+    moving_html = simple_get('https://finance.yahoo.com/quote/' + ticker + '/key-statistics?p=' + ticker)
+
+    movingAverage = BeautifulSoup(moving_html, 'html.parser')
+
+    twoMovingAverage = movingAverage.find_all('td', {'class': 'Fw(500) Ta(end) Pstart(10px) Miw(60px)'})
+
+    print("200 Day Moving Average:", twoMovingAverage[15].text.replace(',', ''))
+
+    NumMovingAvearge = float(twoMovingAverage[15].text.replace(',', ''))
+
+    # algo
+    if NumPrice <= NumWeeklyLow and NumPrice > NumMovingAvearge:
+        print('buy')
+    elif NumPrice > NumWeeklyLow and NumPrice > NumMovingAvearge:
+        if NumPrice - NumWeeklyLow <= NumPrice / 100:
+            print('buy - caution')
+        elif NumPrice - NumWeeklyLow > NumPrice / 100:
+                print('hold')
+
+    elif NumPrice >= NumWeeklyHigh:
+        print('sell')
+    else:
+        print("Don't Buy")
+
+
+
+
+
+
